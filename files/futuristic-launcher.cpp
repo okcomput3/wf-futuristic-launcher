@@ -163,7 +163,7 @@ struct DesktopApp {
 struct Config {
     Theme current_theme = THEME_BLUE;
     int icon_size = 64;
-    float transparency = 0.98f;
+    float transparency = 0.90f;
     std::set<std::string> favorites;
     std::map<std::string, int> launch_counts;
     std::map<std::string, time_t> last_launches;
@@ -656,7 +656,7 @@ private:
             }
             
             #header-box {
-                background: rgba(5, 5, 10, 0.8);
+                background: transparent;
                 border-bottom: 1px solid rgba()" << colors.primary << R"(, 0.5);
                 padding: 8px;
             }
@@ -1525,7 +1525,7 @@ public:
         }
 
         // Normal app display
-        const int ICONS_PER_ROW = 3;
+        const int ICONS_PER_ROW = 4;
         
         for (size_t i = 0; i < filtered_apps.size(); i += ICONS_PER_ROW) {
             GtkWidget *row_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
