@@ -1,0 +1,122 @@
+╔═══════════════════════════════════════════════════════════╗
+║           FUTURISTIC LAUNCHER - QUICK START              ║
+╚═══════════════════════════════════════════════════════════╝
+
+🚀 INSTALLATION (3 simple steps)
+═══════════════════════════════════════════════════════════
+
+1. Run the installer:
+   ./install.sh
+
+2. Reload Wayfire
+
+3. Click your launcher button - enjoy! ✨
+
+
+📦 MANUAL INSTALLATION (if you prefer)
+═══════════════════════════════════════════════════════════
+
+make
+make install
+
+
+🎮 USAGE
+═══════════════════════════════════════════════════════════
+
+Keyboard:
+  Type         → Search applications
+  ↑ / ↓        → Navigate list  
+  Enter        → Launch selected app
+  Esc          → Close launcher
+
+Mouse:
+  Click        → Launch application
+  Scroll       → Browse list
+
+
+⚙️  CONFIGURATION
+═══════════════════════════════════════════════════════════
+
+Add to ~/.config/wayfire.ini:
+
+[futuristic-panel]
+launcher_cmd = futuristic-launcher
+
+
+🎨 CUSTOMIZATION
+═══════════════════════════════════════════════════════════
+
+Edit futuristic-launcher.cpp → WINDOW_CSS section
+
+Change colors:
+  rgba(80, 200, 255, ...)  ← Main cyan/blue glow
+  rgba(3, 3, 8, ...)       ← Background darkness
+  
+Then rebuild:
+  make clean && make && make install
+
+
+🔧 REQUIREMENTS
+═══════════════════════════════════════════════════════════
+
+• g++ compiler (C++17)
+• GTK4 or GTK3
+• pkg-config
+
+Ubuntu/Debian:  sudo apt install build-essential libgtk-4-dev
+Arch Linux:     sudo pacman -S base-devel gtk4
+Fedora:         sudo dnf install gcc-c++ gtk4-devel
+
+
+❓ TROUBLESHOOTING
+═══════════════════════════════════════════════════════════
+
+Q: Build fails with "gtk not found"
+A: Install GTK development packages (see Requirements)
+
+Q: No applications show up
+A: Check /usr/share/applications/ has .desktop files
+   Run from terminal to see errors: futuristic-launcher
+
+Q: Panel doesn't launch it
+A: Verify wayfire.ini has correct launcher_cmd path
+   Test manually: futuristic-launcher
+
+Q: Colors look different
+A: GTK theme may override - try GTK_THEME=Adwaita:dark
+
+
+🗑️  UNINSTALL
+═══════════════════════════════════════════════════════════
+
+make uninstall
+
+
+📂 FILES INCLUDED
+═══════════════════════════════════════════════════════════
+
+futuristic-launcher.cpp  → Main source code
+Makefile                 → Build configuration  
+install.sh               → Automated installer
+README.md                → Full documentation
+VISUAL_FEATURES.md       → Design details
+QUICKSTART.txt           → This file
+
+
+💡 TIPS
+═══════════════════════════════════════════════════════════
+
+• The launcher matches your panel's cyberpunk aesthetic
+• Press Esc quickly if you open it by accident
+• Search is smart - try typing just a few letters
+• Keyboard navigation is super fast - try it!
+• Want icons? Check README for enhancement ideas
+
+
+🎉 ENJOY YOUR FUTURISTIC LAUNCHER!
+═══════════════════════════════════════════════════════════
+
+This launcher transforms boring app launching into a
+cyberpunk experience. Perfectly matched to your panel! 🚀
+
+For issues or customization help, check README.md
