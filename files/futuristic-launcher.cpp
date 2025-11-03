@@ -1,30 +1,16 @@
 /*
- * Futuristic Launcher MAXED OUT - Ultimate Application Launcher
+ * Futuristic Launcher with Shader Background
  * 
- * A cyberpunk-styled application launcher with:
- * - Smooth fade animations
- * - Fuzzy search with typo tolerance
- * - Recent & favorite apps
- * - Multiple color themes
- * - Calculator mode (type math expressions)
- * - Web search (prefix with '?')
- * - Terminal commands (prefix with '>')
- * - Power menu (shutdown/restart/logout)
- * - System stats display
- * - Icon scaling on hover
- * - Alt+Number quick launch
- * - Context menu (right-click)
- * - Config file persistence
+ * Build: g++ futuristic-launcher-shader.cpp -o futuristic-launcher `pkg-config --cflags --libs gtk4 gtk4-layer-shell-0 epoxy` -std=c++17
+ * Alternative for GTK3: g++ futuristic-launcher-shader.cpp -o futuristic-launcher `pkg-config --cflags --libs gtk+-3.0 gtk-layer-shell-0 epoxy` -std=c++17
  * 
- * Build: g++ futuristic-launcher-maxed.cpp -o futuristic-launcher `pkg-config --cflags --libs gtk4 gtk4-layer-shell-0` -std=c++17
- * Alternative for GTK3: g++ futuristic-launcher-maxed.cpp -o futuristic-launcher `pkg-config --cflags --libs gtk+-3.0 gtk-layer-shell-0` -std=c++17
- * 
- * Requires: gtk-layer-shell for proper Wayland positioning
+ * Requires: gtk-layer-shell, epoxy for OpenGL
  * 
  * MIT License
  */
 
 #include <gtk/gtk.h>
+#include <epoxy/gl.h>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -109,6 +95,14 @@ namespace fs = std::filesystem;
     static inline void gtk_window_present_compat(GtkWindow* window) {
         gtk_widget_show_all(GTK_WIDGET(window));
     }
+    
+    static inline void gtk_overlay_set_child(GtkOverlay* overlay, GtkWidget* child) {
+        gtk_container_add(GTK_CONTAINER(overlay), child);
+    }
+    
+    static inline void gtk_overlay_add_overlay_compat(GtkOverlay* overlay, GtkWidget* widget) {
+        gtk_overlay_add_overlay(overlay, widget);
+    }
 #else
     static inline void gtk_list_box_remove_compat(GtkListBox* lb, GtkWidget* child) {
         gtk_list_box_remove(lb, child);
@@ -117,7 +111,175 @@ namespace fs = std::filesystem;
     static inline void gtk_window_present_compat(GtkWindow* window) {
         gtk_window_present(window);
     }
+    
+    static inline void gtk_overlay_add_overlay_compat(GtkOverlay* overlay, GtkWidget* widget) {
+        gtk_overlay_add_overlay(overlay, widget);
+    }
 #endif
+
+// Shader source
+const char* vertex_shader_source = R"(
+    #version 330 core
+    layout(location = 0) in vec2 position;
+    out vec2 fragCoord;
+    void main() {
+        fragCoord = position * 0.5 + 0.5;
+        gl_Position = vec4(position, 0.0, 1.0);
+    }
+)";
+
+const char* fragment_shader_source = R"(
+    #version 330 core
+    precision highp float;
+   
+    in vec2 fragCoord;
+    out vec4 fragColor;
+   
+    uniform float time;
+    uniform vec2 resolution;
+
+    #define iTime time
+    #define iResolution resolution
+
+    mat2 rot(in float a){float c = cos(a), s = sin(a);return mat2(c,s,-s,c);}
+    const mat3 m3 = mat3(0.33338, 0.56034, -0.71817, -0.87887, 0.32651, -0.15323, 0.15162, 0.69596, 0.61339)*1.93;
+    float mag2(vec2 p){return dot(p,p);}
+    float linstep(in float mn, in float mx, in float x){ return clamp((x - mn)/(mx - mn), 0., 1.); }
+    float prm1 = 0.;
+    vec2 bsMo = vec2(0);
+
+    vec2 disp(float t){ return vec2(sin(t*0.22)*1., cos(t*0.175)*1.)*2.; }
+
+    vec2 map(vec3 p)
+    {
+        vec3 p2 = p;
+        p2.xy -= disp(p.z).xy;
+        p.xy *= rot(sin(p.z+iTime)*(0.1 + prm1*0.05) + iTime*0.09);
+        float cl = mag2(p2.xy);
+        float d = 0.;
+        p *= .61;
+        float z = 1.;
+        float trk = 1.;
+        float dspAmp = 0.1 + prm1*0.2;
+        for(int i = 0; i < 5; i++)
+        {
+            p += sin(p.zxy*0.75*trk + iTime*trk*.8)*dspAmp;
+            d -= abs(dot(cos(p), sin(p.yzx))*z);
+            z *= 0.57;
+            trk *= 1.4;
+            p = p*m3;
+        }
+        d = abs(d + prm1*3.)+ prm1*.3 - 2.5 + bsMo.y;
+        return vec2(d + cl*.2 + 0.25, cl);
+    }
+
+    vec4 render( in vec3 ro, in vec3 rd, float time )
+    {
+        vec4 rez = vec4(0);
+        const float ldst = 8.;
+        vec3 lpos = vec3(disp(time + ldst)*0.5, time + ldst);
+        float t = 1.5;
+        float fogT = 0.;
+        for(int i=0; i<130; i++)
+        {
+            if(rez.a > 0.99)break;
+
+            vec3 pos = ro + t*rd;
+            vec2 mpv = map(pos);
+            float den = clamp(mpv.x-0.3,0.,1.)*1.12;
+            float dn = clamp((mpv.x + 2.),0.,3.);
+            
+            vec4 col = vec4(0);
+            if (mpv.x > 0.6)
+            {
+                col = vec4(sin(vec3(5.,0.4,0.2) + mpv.y*0.1 +sin(pos.z*0.4)*0.5 + 1.8)*0.5 + 0.5,0.08);
+                col *= den*den*den;
+                col.rgb *= linstep(4.,-2.5, mpv.x)*2.3;
+                float dif =  clamp((den - map(pos+.8).x)/9., 0.001, 1. );
+                dif += clamp((den - map(pos+.35).x)/2.5, 0.001, 1. );
+                col.xyz *= den*(vec3(0.005,.045,.075) + 1.5*vec3(0.033,0.07,0.03)*dif);
+            }
+            
+            float fogC = exp(t*0.2 - 2.2);
+            col.rgba += vec4(0.06,0.11,0.11, 0.1)*clamp(fogC-fogT, 0., 1.);
+            fogT = fogC;
+            rez = rez + col*(1. - rez.a);
+            t += clamp(0.5 - dn*dn*.05, 0.09, 0.3);
+        }
+        return clamp(rez, 0.0, 1.0);
+    }
+
+    float getsat(vec3 c)
+    {
+        float mi = min(min(c.x, c.y), c.z);
+        float ma = max(max(c.x, c.y), c.z);
+        return (ma - mi)/(ma+ 1e-7);
+    }
+
+    vec3 iLerp(in vec3 a, in vec3 b, in float x)
+    {
+        vec3 ic = mix(a, b, x) + vec3(1e-6,0.,0.);
+        float sd = abs(getsat(ic) - mix(getsat(a), getsat(b), x));
+        vec3 dir = normalize(vec3(2.*ic.x - ic.y - ic.z, 2.*ic.y - ic.x - ic.z, 2.*ic.z - ic.y - ic.x));
+        float lgt = dot(vec3(1.0), ic);
+        float ff = dot(dir, normalize(ic));
+        ic += 1.5*dir*sd*ff*lgt;
+        return clamp(ic,0.,1.);
+    }
+
+    void main(void)
+    {   
+        vec2 q = vec2(fragCoord.x, 1.0 - fragCoord.y);
+        vec2 p = (vec2(fragCoord.x, 1.0 - fragCoord.y) * iResolution.xy - 0.5*iResolution.xy)/iResolution.y;
+        bsMo = vec2(0);
+        
+        float time = iTime*3.;
+        vec3 ro = vec3(0,0,time);
+        
+        ro += vec3(sin(iTime)*0.5,sin(iTime*1.)*0.,0);
+            
+        float dspAmp = .85;
+        ro.xy += disp(ro.z)*dspAmp;
+        float tgtDst = 3.5;
+        
+        vec3 target = normalize(ro - vec3(disp(time + tgtDst)*dspAmp, time + tgtDst));
+        ro.x -= bsMo.x*2.;
+        vec3 rightdir = normalize(cross(target, vec3(0,1,0)));
+        vec3 updir = normalize(cross(rightdir, target));
+        rightdir = normalize(cross(updir, target));
+        vec3 rd=normalize((p.x*rightdir + p.y*updir)*1. - target);
+        rd.xy *= rot(-disp(time + 3.5).x*0.2 + bsMo.x);
+        prm1 = smoothstep(-0.4, 0.4,sin(iTime*0.3));
+        vec4 scn = render(ro, rd, time);
+            
+        vec3 col = scn.rgb;
+        col = iLerp(col.bgr, col.rgb, clamp(1.-prm1,0.05,1.));
+        
+        col = pow(col, vec3(.55,0.65,0.6))*vec3(1.,.97,.9);
+
+        col *= pow( 16.0*q.x*q.y*(1.0-q.x)*(1.0-q.y), 0.12)*0.7+0.3;
+        
+        // Rounded corners with bevel
+        vec2 uv = fragCoord * iResolution.xy;
+        float radius = 12.0;
+        float bevelWidth = 5.0;
+        vec2 dist = min(uv, iResolution.xy - uv);
+        float cornerDist = length(max(vec2(radius) - dist, 0.0));
+        float alpha = 1.0 - smoothstep(radius - 1.0, radius, cornerDist);
+        
+        // Bevel effect
+        float edgeDist = min(min(dist.x, dist.y), cornerDist);
+        float bevel = smoothstep(0.0, bevelWidth, edgeDist);
+        bevel = pow(bevel, 0.8);
+        
+        col *= mix(1.0, 1.4, bevel);
+        
+        float innerGlow = smoothstep(bevelWidth + 2.0, bevelWidth, edgeDist);
+        col += vec3(0.15, 0.2, 0.25) * innerGlow * 0.3;
+        
+        fragColor = vec4( col, alpha );
+    }
+)";
 
 // Theme colors
 enum Theme {
@@ -162,15 +324,14 @@ struct DesktopApp {
 
 struct Config {
     Theme current_theme = THEME_BLUE;
-    int icon_size = 64;
+    int icon_size = 96;
     float transparency = 0.90f;
     std::set<std::string> favorites;
     std::map<std::string, int> launch_counts;
     std::map<std::string, time_t> last_launches;
     
     bool validate() {
-        // Validate all values are in acceptable ranges
-        if (icon_size < 16 || icon_size > 256) icon_size = 64;
+        if (icon_size < 16 || icon_size > 256) icon_size = 96;
         if (transparency < 0.0f || transparency > 1.0f) transparency = 0.98f;
         if (current_theme < THEME_BLUE || current_theme > THEME_MORPH) current_theme = THEME_BLUE;
         return true;
@@ -193,7 +354,6 @@ struct Config {
             std::string key = line.substr(0, eq);
             std::string value = line.substr(eq + 1);
             
-            // Skip empty values
             if (value.empty()) continue;
             
             try {
@@ -227,14 +387,7 @@ struct Config {
                         last_launches[app_name] = timestamp;
                     }
                 }
-            } catch (const std::invalid_argument& e) {
-                // Skip invalid entries
-                std::cerr << "Warning: Invalid config value for key '" << key << "': " << value << std::endl;
-                error_count++;
-                continue;
-            } catch (const std::out_of_range& e) {
-                // Skip out of range entries
-                std::cerr << "Warning: Out of range config value for key '" << key << "': " << value << std::endl;
+            } catch (...) {
                 error_count++;
                 continue;
             }
@@ -242,12 +395,9 @@ struct Config {
         
         file.close();
         
-        // If too many errors, backup and reset
         if (error_count > 10) {
-            std::cerr << "Too many config errors (" << error_count << "), creating backup and resetting..." << std::endl;
             std::string backup_path = config_path + ".backup";
             std::rename(config_path.c_str(), backup_path.c_str());
-            // Reset to defaults (already done by initialization)
         }
         
         validate();
@@ -288,7 +438,12 @@ private:
     GtkWidget *header_box;
     GtkWidget *stats_label;
     GtkWidget *power_menu_button;
+    GtkWidget *gl_area;
     GtkCssProvider *css_provider;
+    
+    GLuint shader_program;
+    GLuint vao, vbo;
+    gint64 start_time;
     
     std::vector<DesktopApp> all_apps;
     std::vector<DesktopApp> filtered_apps;
@@ -303,9 +458,8 @@ private:
     guint morph_timer = 0;
     double current_opacity = 0.0;
     bool fading_in = false;
-    int morph_current_theme = 0;  // 0-5 for cycling through themes
+    int morph_current_theme = 0;
     
-    // Special modes
     bool calculator_mode = false;
     bool web_search_mode = false;
     bool command_mode = false;
@@ -313,10 +467,127 @@ private:
     static constexpr int LAUNCHER_WIDTH = 500;
     static constexpr int LAUNCHER_HEIGHT = 600;
     static constexpr int MARGIN_TOP = 50;
-    
     static constexpr bool POSITION_TOP_LEFT = true;
     
-    // Fuzzy search scoring
+    // Shader initialization
+    void init_shaders() {
+        // Compile vertex shader
+        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vs, 1, &vertex_shader_source, NULL);
+        glCompileShader(vs);
+        
+        // Check vertex shader
+        GLint success;
+        glGetShaderiv(vs, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            char log[512];
+            glGetShaderInfoLog(vs, 512, NULL, log);
+            std::cerr << "Vertex shader error: " << log << std::endl;
+        }
+        
+        // Compile fragment shader
+        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fs, 1, &fragment_shader_source, NULL);
+        glCompileShader(fs);
+        
+        // Check fragment shader
+        glGetShaderiv(fs, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            char log[512];
+            glGetShaderInfoLog(fs, 512, NULL, log);
+            std::cerr << "Fragment shader error: " << log << std::endl;
+        }
+        
+        // Link program
+        shader_program = glCreateProgram();
+        glAttachShader(shader_program, vs);
+        glAttachShader(shader_program, fs);
+        glLinkProgram(shader_program);
+        
+        // Check program
+        glGetProgramiv(shader_program, GL_LINK_STATUS, &success);
+        if (!success) {
+            char log[512];
+            glGetProgramInfoLog(shader_program, 512, NULL, log);
+            std::cerr << "Shader program error: " << log << std::endl;
+        }
+        
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        
+        // Create quad
+        float vertices[] = {
+            -1.0f, -1.0f,
+             1.0f, -1.0f,
+            -1.0f,  1.0f,
+             1.0f,  1.0f
+        };
+        
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+        glEnableVertexAttribArray(0);
+    }
+    
+    static void on_gl_realize(GtkGLArea *area, gpointer user_data) {
+        FuturisticLauncher *launcher = static_cast<FuturisticLauncher*>(user_data);
+        gtk_gl_area_make_current(area);
+        
+        if (gtk_gl_area_get_error(area) != NULL) {
+            std::cerr << "GL Area error on realize" << std::endl;
+            return;
+        }
+        
+        launcher->init_shaders();
+    }
+    
+    static gboolean on_gl_render(GtkGLArea *area, GdkGLContext *context, gpointer user_data) {
+        FuturisticLauncher *launcher = static_cast<FuturisticLauncher*>(user_data);
+        
+        glClearColor(0.0, 0.0, 0.0, 0.0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        
+        // Enable blending for transparency
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        
+        glUseProgram(launcher->shader_program);
+        
+        // Calculate time
+        gint64 current_time = g_get_monotonic_time();
+        float time = (current_time - launcher->start_time) / 1000000.0f;
+        
+        // Get resolution (GTK3/4 compatible)
+        int width, height;
+        #if GTK_IS_VERSION_4
+            width = gtk_widget_get_width(GTK_WIDGET(area));
+            height = gtk_widget_get_height(GTK_WIDGET(area));
+        #else
+            GtkAllocation alloc;
+            gtk_widget_get_allocation(GTK_WIDGET(area), &alloc);
+            width = alloc.width;
+            height = alloc.height;
+        #endif
+        
+        glUniform1f(glGetUniformLocation(launcher->shader_program, "time"), time);
+        glUniform2f(glGetUniformLocation(launcher->shader_program, "resolution"), width, height);
+        
+        glBindVertexArray(launcher->vao);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        
+        glDisable(GL_BLEND);
+        
+        return TRUE;
+    }
+    
+    static gboolean gl_tick_callback(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+        gtk_gl_area_queue_render(GTK_GL_AREA(widget));
+        return G_SOURCE_CONTINUE;
+    }
+    
     int fuzzy_score(const std::string& str, const std::string& pattern) {
         std::string str_lower = str;
         std::string pattern_lower = pattern;
@@ -330,7 +601,7 @@ private:
         
         while (str_idx < str_lower.length() && pat_idx < pattern_lower.length()) {
             if (str_lower[str_idx] == pattern_lower[pat_idx]) {
-                score += 1 + consecutive * 5; // Bonus for consecutive matches
+                score += 1 + consecutive * 5;
                 consecutive++;
                 pat_idx++;
             } else {
@@ -340,15 +611,13 @@ private:
         }
         
         if (pat_idx != pattern_lower.length()) {
-            return 0; // Didn't match all pattern chars
+            return 0;
         }
         
-        // Bonus for exact substring match
         if (str_lower.find(pattern_lower) != std::string::npos) {
             score += 50;
         }
         
-        // Bonus for match at start
         if (str_lower.find(pattern_lower) == 0) {
             score += 100;
         }
@@ -356,272 +625,15 @@ private:
         return score;
     }
     
-    std::string get_theme_css_for(Theme theme_to_use) {
-        ThemeColors colors = theme_palette[theme_to_use];
+    std::string get_theme_css() {
+        ThemeColors colors = theme_palette[config.current_theme];
         std::ostringstream css;
         
-        // Theme-specific styling
-        switch(theme_to_use) {
-            case THEME_BLUE: // Classic Cyberpunk
-                css << R"(
-                    window {
-                        background: linear-gradient(135deg, rgba(3, 3, 8, 0.98) 0%, rgba(8, 8, 15, 0.98) 100%);
-                        border: 2px solid rgba(50, 150, 255, 0.8);
-                        border-radius: 12px;
-                    }
-                    entry {
-                        background: rgba(15, 15, 25, 0.95);
-                        color: rgba(180, 230, 255, 1.0);
-                        border: 2px solid rgba(50, 150, 255, 0.5);
-                        border-radius: 8px;
-                        padding: 12px 16px;
-                        font-size: 16px;
-                        font-weight: bold;
-                    }
-                    entry:focus {
-                        border: 2px solid rgba(80, 200, 255, 0.9);
-                        background: rgba(20, 20, 35, 0.95);
-                    }
-                    #icon-box {
-                        background: rgba(12, 12, 20, 0.7);
-                        border: 1px solid rgba(40, 40, 60, 0.6);
-                        border-radius: 6px;
-                        padding: 8px;
-                        margin: 2px;
-                        transition: all 150ms cubic-bezier(0.4, 0.0, 0.2, 1);
-                    }
-                    #icon-box:hover {
-                        background: rgba(20, 50, 90, 0.7);
-                        border: 1px solid rgba(100, 180, 255, 0.8);
-                        transform: scale(1.05);
-                    }
-                    .selected-icon {
-                        background: rgba(20, 50, 90, 0.7) !important;
-                        border: 1px solid rgba(80, 200, 255, 0.8) !important;
-                        transform: scale(1.05);
-                    }
-                )";
-                break;
-                
-            case THEME_PURPLE: // Neon Minimal - Thin borders, rounded corners
-                css << R"(
-                    window {
-                        background: rgba(18, 8, 25, 0.96);
-                        border: 1px solid rgba(200, 80, 255, 0.9);
-                        border-radius: 20px;
-                    }
-                    entry {
-                        background: rgba(25, 10, 35, 0.8);
-                        color: rgba(255, 180, 255, 1.0);
-                        border: 1px solid rgba(150, 50, 255, 0.6);
-                        border-radius: 15px;
-                        padding: 14px 20px;
-                        font-size: 15px;
-                        font-weight: normal;
-                    }
-                    entry:focus {
-                        border: 1px solid rgba(200, 100, 255, 1.0);
-                        background: rgba(30, 15, 40, 0.9);
-                    }
-                    #icon-box {
-                        background: rgba(30, 15, 45, 0.5);
-                        border: 1px solid rgba(150, 80, 200, 0.3);
-                        border-radius: 15px;
-                        padding: 10px;
-                        margin: 3px;
-                        transition: all 200ms ease-out;
-                    }
-                    #icon-box:hover {
-                        background: rgba(60, 30, 90, 0.8);
-                        border: 1px solid rgba(200, 80, 255, 1.0);
-                        transform: scale(1.08) rotate(2deg);
-                    }
-                    .selected-icon {
-                        background: rgba(80, 40, 120, 0.8) !important;
-                        border: 1px solid rgba(220, 100, 255, 1.0) !important;
-                        transform: scale(1.08);
-                    }
-                )";
-                break;
-                
-            case THEME_GREEN: // Matrix Terminal - Sharp edges, monospace feel
-                css << R"(
-                    window {
-                        background: rgba(0, 8, 0, 0.98);
-                        border: 3px solid rgba(80, 255, 150, 0.8);
-                        border-radius: 4px;
-                    }
-                    entry {
-                        background: rgba(0, 15, 5, 0.95);
-                        color: rgba(80, 255, 150, 1.0);
-                        border: 2px solid rgba(50, 200, 100, 0.6);
-                        border-radius: 2px;
-                        padding: 10px 14px;
-                        font-size: 16px;
-                        font-weight: bold;
-                        font-family: monospace;
-                    }
-                    entry:focus {
-                        border: 2px solid rgba(100, 255, 180, 1.0);
-                        background: rgba(5, 20, 10, 0.95);
-                    }
-                    #icon-box {
-                        background: rgba(5, 20, 10, 0.8);
-                        border: 2px solid rgba(50, 150, 80, 0.5);
-                        border-radius: 0px;
-                        padding: 6px;
-                        margin: 4px;
-                        transition: all 100ms linear;
-                    }
-                    #icon-box:hover {
-                        background: rgba(10, 40, 20, 0.9);
-                        border: 2px solid rgba(100, 255, 180, 1.0);
-                        transform: scale(1.03);
-                    }
-                    .selected-icon {
-                        background: rgba(15, 60, 30, 0.9) !important;
-                        border: 2px solid rgba(120, 255, 200, 1.0) !important;
-                        transform: scale(1.03);
-                    }
-                )";
-                break;
-                
-            case THEME_RED: // Hexagonal Gaming - Angular design
-                css << R"(
-                    window {
-                        background: linear-gradient(45deg, rgba(20, 0, 0, 0.98) 0%, rgba(40, 5, 10, 0.98) 100%);
-                        border: 3px solid rgba(255, 50, 100, 0.9);
-                        border-radius: 0px;
-                        box-shadow: 0 0 30px rgba(255, 50, 100, 0.3);
-                    }
-                    entry {
-                        background: rgba(30, 5, 10, 0.95);
-                        color: rgba(255, 150, 180, 1.0);
-                        border: 2px solid rgba(255, 80, 120, 0.7);
-                        border-radius: 0px;
-                        padding: 12px 18px;
-                        font-size: 17px;
-                        font-weight: bold;
-                    }
-                    entry:focus {
-                        border: 3px solid rgba(255, 100, 150, 1.0);
-                        background: rgba(40, 10, 15, 0.95);
-                    }
-                    #icon-box {
-                        background: rgba(25, 5, 10, 0.75);
-                        border: 2px solid rgba(150, 30, 60, 0.6);
-                        border-radius: 0px;
-                        padding: 8px;
-                        margin: 3px;
-                        transition: all 120ms ease-in;
-                        clip-path: polygon(10% 0%, 90% 0%, 100% 10%, 100% 90%, 90% 100%, 10% 100%, 0% 90%, 0% 10%);
-                    }
-                    #icon-box:hover {
-                        background: rgba(60, 15, 25, 0.9);
-                        border: 2px solid rgba(255, 80, 130, 1.0);
-                        transform: scale(1.1);
-                    }
-                    .selected-icon {
-                        background: rgba(80, 20, 35, 0.9) !important;
-                        border: 3px solid rgba(255, 100, 150, 1.0) !important;
-                        transform: scale(1.1);
-                    }
-                )";
-                break;
-                
-            case THEME_ORANGE: // Retro Warm - Soft gradients, vintage
-                css << R"(
-                    window {
-                        background: radial-gradient(circle at top left, rgba(25, 15, 5, 0.96) 0%, rgba(20, 10, 8, 0.96) 100%);
-                        border: 2px solid rgba(255, 165, 80, 0.7);
-                        border-radius: 25px;
-                        box-shadow: inset 0 0 50px rgba(255, 140, 50, 0.1);
-                    }
-                    entry {
-                        background: rgba(30, 20, 10, 0.9);
-                        color: rgba(255, 200, 150, 1.0);
-                        border: 2px solid rgba(200, 130, 60, 0.5);
-                        border-radius: 20px;
-                        padding: 14px 22px;
-                        font-size: 15px;
-                        font-weight: normal;
-                    }
-                    entry:focus {
-                        border: 2px solid rgba(255, 180, 100, 0.8);
-                        background: rgba(35, 25, 15, 0.95);
-                    }
-                    #icon-box {
-                        background: rgba(35, 25, 15, 0.6);
-                        border: 1px solid rgba(180, 120, 60, 0.4);
-                        border-radius: 12px;
-                        padding: 12px;
-                        margin: 2px;
-                        transition: all 250ms ease-in-out;
-                    }
-                    #icon-box:hover {
-                        background: rgba(60, 40, 20, 0.85);
-                        border: 2px solid rgba(255, 165, 80, 0.9);
-                        transform: scale(1.06);
-                        box-shadow: 0 4px 15px rgba(255, 140, 50, 0.3);
-                    }
-                    .selected-icon {
-                        background: rgba(70, 50, 25, 0.9) !important;
-                        border: 2px solid rgba(255, 180, 100, 0.9) !important;
-                        transform: scale(1.06);
-                        box-shadow: 0 4px 15px rgba(255, 140, 50, 0.4);
-                    }
-                )";
-                break;
-                
-            case THEME_CYAN: // Holographic Future - Glossy, transparent
-                css << R"(
-                    window {
-                        background: linear-gradient(180deg, rgba(5, 15, 18, 0.92) 0%, rgba(8, 20, 25, 0.92) 100%);
-                        border: 1px solid rgba(100, 255, 255, 0.6);
-                        border-radius: 16px;
-                        box-shadow: 0 8px 32px rgba(50, 255, 255, 0.2);
-                    }
-                    entry {
-                        background: rgba(10, 25, 30, 0.7);
-                        color: rgba(200, 255, 255, 1.0);
-                        border: 1px solid rgba(80, 255, 255, 0.4);
-                        border-radius: 12px;
-                        padding: 13px 20px;
-                        font-size: 16px;
-                        font-weight: 300;
-                    }
-                    entry:focus {
-                        border: 2px solid rgba(120, 255, 255, 0.8);
-                        background: rgba(15, 30, 35, 0.85);
-                        box-shadow: 0 0 20px rgba(80, 255, 255, 0.3);
-                    }
-                    #icon-box {
-                        background: rgba(15, 30, 35, 0.5);
-                        border: 1px solid rgba(80, 200, 220, 0.3);
-                        border-radius: 10px;
-                        padding: 10px;
-                        margin: 3px;
-                        transition: all 180ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
-                        backdrop-filter: blur(5px);
-                    }
-                    #icon-box:hover {
-                        background: rgba(25, 50, 60, 0.8);
-                        border: 1px solid rgba(100, 255, 255, 0.9);
-                        transform: scale(1.07) translateY(-3px);
-                        box-shadow: 0 8px 20px rgba(50, 255, 255, 0.4);
-                    }
-                    .selected-icon {
-                        background: rgba(30, 60, 70, 0.85) !important;
-                        border: 2px solid rgba(120, 255, 255, 1.0) !important;
-                        transform: scale(1.07) translateY(-3px);
-                        box-shadow: 0 8px 20px rgba(80, 255, 255, 0.5);
-                    }
-                )";
-                break;
-        }
-        
-        // Common styles for all themes
         css << R"(
+            window {
+                background: transparent;
+            }
+            
             scrolledwindow {
                 background: transparent;
                 border: none;
@@ -645,6 +657,42 @@ private:
                 border: none;
             }
             
+            entry {
+                background: rgba(15, 15, 25, 0.85);
+                color: rgba(180, 230, 255, 1.0);
+                border: 2px solid rgba()" << colors.primary << R"(, 0.5);
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            
+            entry:focus {
+                border: 2px solid rgba()" << colors.secondary << R"(, 0.9);
+                background: rgba(20, 20, 35, 0.90);
+            }
+            
+            #icon-box {
+                background: rgba(12, 12, 20, 0.6);
+                border: 1px solid rgba(40, 40, 60, 0.5);
+                border-radius: 6px;
+                padding: 8px;
+                margin: 2px;
+                transition: all 150ms cubic-bezier(0.4, 0.0, 0.2, 1);
+            }
+            
+            #icon-box:hover {
+                background: rgba(20, 50, 90, 0.7);
+                border: 1px solid rgba()" << colors.primary << R"(, 0.8);
+                transform: scale(1.05);
+            }
+            
+            .selected-icon {
+                background: rgba(20, 50, 90, 0.7) !important;
+                border: 1px solid rgba()" << colors.secondary << R"(, 0.8) !important;
+                transform: scale(1.05);
+            }
+            
             .favorite-star {
                 color: rgba(255, 215, 0, 1.0);
                 font-size: 14px;
@@ -657,7 +705,7 @@ private:
             
             #header-box {
                 background: transparent;
-                border-bottom: 1px solid rgba()" << colors.primary << R"(, 0.5);
+                border-bottom: 1px solid rgba()" << colors.primary << R"(, 0.3);
                 padding: 8px;
             }
             
@@ -668,7 +716,7 @@ private:
             }
             
             button {
-                background: rgba(15, 15, 25, 0.8);
+                background: rgba(15, 15, 25, 0.7);
                 color: rgba(180, 230, 255, 1.0);
                 border: 1px solid rgba()" << colors.primary << R"(, 0.5);
                 border-radius: 6px;
@@ -677,7 +725,7 @@ private:
             }
             
             button:hover {
-                background: rgba(20, 50, 90, 0.9);
+                background: rgba(20, 50, 90, 0.8);
                 border: 1px solid rgba()" << colors.secondary << R"(, 0.8);
             }
             
@@ -703,28 +751,7 @@ private:
         return css.str();
     }
     
-    std::string get_theme_css() {
-        // If morph theme, delegate to the current morphed theme
-        if (config.current_theme == THEME_MORPH) {
-            Theme morphed = static_cast<Theme>(morph_current_theme);
-            return get_theme_css_for(morphed);
-        }
-        // Otherwise use the selected theme
-        return get_theme_css_for(config.current_theme);
-    }
-    
     void apply_theme() {
-        // Stop morph timer if it was running
-        if (morph_timer != 0) {
-            g_source_remove(morph_timer);
-            morph_timer = 0;
-        }
-        
-        // Start morph timer if morph theme is selected
-        if (config.current_theme == THEME_MORPH) {
-            morph_timer = g_timeout_add(3000, morph_timer_callback, this); // Change every 3 seconds
-        }
-        
         std::string css = get_theme_css();
         
         #if GTK_IS_VERSION_4
@@ -760,18 +787,6 @@ private:
     static gboolean stats_timer_callback(gpointer user_data) {
         FuturisticLauncher *launcher = static_cast<FuturisticLauncher*>(user_data);
         launcher->update_stats();
-        return G_SOURCE_CONTINUE;
-    }
-    
-    static gboolean morph_timer_callback(gpointer user_data) {
-        FuturisticLauncher *launcher = static_cast<FuturisticLauncher*>(user_data);
-        
-        // Cycle to next theme
-        launcher->morph_current_theme = (launcher->morph_current_theme + 1) % 6;
-        
-        // Apply the morphed theme
-        launcher->apply_theme();
-        
         return G_SOURCE_CONTINUE;
     }
     
@@ -812,17 +827,14 @@ private:
             gtk_widget_set_visible(window, TRUE);
         }
         
-        fade_timer = g_timeout_add(16, fade_timer_callback, this); // ~60fps
+        fade_timer = g_timeout_add(16, fade_timer_callback, this);
     }
     
     double calculate_expression(const std::string& expr) {
-        // Simple calculator - supports +, -, *, /, (, )
         try {
-            // Remove spaces
             std::string clean_expr = expr;
             clean_expr.erase(std::remove(clean_expr.begin(), clean_expr.end(), ' '), clean_expr.end());
             
-            // Very basic evaluation using system bc (for demo purposes)
             std::string cmd = "echo '" + clean_expr + "' | bc -l 2>/dev/null";
             FILE* pipe = popen(cmd.c_str(), "r");
             if (!pipe) return NAN;
@@ -846,6 +858,7 @@ public:
     FuturisticLauncher() {
         config.load();
         load_applications();
+        start_time = g_get_monotonic_time();
     }
     
     ~FuturisticLauncher() {
@@ -937,7 +950,6 @@ public:
                 if (entry.path().extension() == ".desktop") {
                     DesktopApp app = parse_desktop_file(entry.path().string());
                     if (!app.name.empty() && !app.no_display) {
-                        // Load stats from config
                         if (config.launch_counts.count(app.name)) {
                             app.launch_count = config.launch_counts[app.name];
                         }
@@ -954,7 +966,6 @@ public:
             }
         }
 
-        // Sort by favorites, then recent, then alphabetically
         std::sort(all_apps.begin(), all_apps.end(), 
             [](const DesktopApp& a, const DesktopApp& b) {
                 if (a.is_favorite != b.is_favorite) return a.is_favorite;
@@ -963,8 +974,6 @@ public:
             });
         
         filtered_apps = all_apps;
-        
-        std::cout << "Loaded " << all_apps.size() << " applications" << std::endl;
     }
 
     DesktopApp parse_desktop_file(const std::string& filepath) {
@@ -1024,7 +1033,6 @@ public:
             return;
         }
         
-        // Check for special modes
         if (search_text[0] == '?') {
             web_search_mode = true;
             return;
@@ -1033,7 +1041,6 @@ public:
             return;
         }
         
-        // Check if it's a math expression
         std::regex math_regex(R"(^[\d\s\+\-\*\/\(\)\.]+$)");
         if (std::regex_match(search_text, math_regex)) {
             double result = calculate_expression(search_text);
@@ -1043,7 +1050,6 @@ public:
             }
         }
 
-        // Fuzzy search
         std::vector<std::pair<DesktopApp, int>> scored_apps;
         
         for (const auto& app : all_apps) {
@@ -1056,7 +1062,6 @@ public:
             }
         }
         
-        // Sort by score
         std::sort(scored_apps.begin(), scored_apps.end(),
             [](const auto& a, const auto& b) {
                 return a.second > b.second;
@@ -1090,7 +1095,6 @@ public:
             g_printerr("Failed to launch %s: %s\n", app.name.c_str(), error->message);
             g_error_free(error);
         } else {
-            // Update launch stats
             for (auto& a : all_apps) {
                 if (a.name == app.name) {
                     a.launch_count++;
@@ -1120,25 +1124,24 @@ public:
             }
         }
         
-        // Re-filter and update
         const char *text = gtk_editable_get_text(GTK_EDITABLE(search_entry));
         filter_apps(text);
         update_list();
     }
     
     void execute_web_search(const std::string& query) {
-        std::string search_query = query.substr(1); // Remove '?'
+        std::string search_query = query.substr(1);
         std::string url = "xdg-open 'https://www.google.com/search?q=" + search_query + "'";
         int ret = system(url.c_str());
-        (void)ret; // Suppress unused warning
+        (void)ret;
         toggle_visibility();
     }
     
     void execute_command(const std::string& command) {
-        std::string cmd = command.substr(1); // Remove '>'
+        std::string cmd = command.substr(1);
         cmd += " &";
         int ret = system(cmd.c_str());
-        (void)ret; // Suppress unused warning
+        (void)ret;
         toggle_visibility();
     }
     
@@ -1151,11 +1154,7 @@ public:
             NULL
         );
         
-        #if GTK_IS_VERSION_4
-            GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-        #else
-            GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-        #endif
+        GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
         
         GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
         gtk_widget_set_margin_start(box, 20);
@@ -1228,7 +1227,6 @@ public:
     #if GTK_IS_VERSION_4
     static void on_icon_clicked(GtkGestureClick *gesture, int n_press, double x, double y, gpointer user_data) {
         FuturisticLauncher *launcher = static_cast<FuturisticLauncher*>(user_data);
-        GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
         int index = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(gesture), "app_index"));
         
         if (index >= 0 && index < (int)launcher->filtered_apps.size()) {
@@ -1250,9 +1248,9 @@ public:
         int index = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "app_index"));
         
         if (index >= 0 && index < (int)launcher->filtered_apps.size()) {
-            if (event->button == 1) { // Left click
+            if (event->button == 1) {
                 launcher->launch_app(launcher->filtered_apps[index]);
-            } else if (event->button == 3) { // Right click
+            } else if (event->button == 3) {
                 launcher->toggle_favorite(launcher->filtered_apps[index]);
             }
         }
@@ -1300,7 +1298,6 @@ public:
         FuturisticLauncher *launcher = static_cast<FuturisticLauncher*>(user_data);
         const int ICONS_PER_ROW = 3;
         
-        // Theme switching with Ctrl+1-7
         if (state & GDK_CONTROL_MASK) {
             if (keyval >= GDK_KEY_1 && keyval <= GDK_KEY_7) {
                 launcher->config.current_theme = static_cast<Theme>(keyval - GDK_KEY_1);
@@ -1309,7 +1306,6 @@ public:
             }
         }
         
-        // Quick launch with Alt+Number
         if (state & GDK_MOD1_MASK) {
             if (keyval >= GDK_KEY_1 && keyval <= GDK_KEY_9) {
                 int index = keyval - GDK_KEY_1;
@@ -1352,7 +1348,6 @@ public:
             std::string search_text(text);
             
             if (launcher->calculator_mode) {
-                // Do nothing - result already shown
                 return TRUE;
             } else if (launcher->web_search_mode) {
                 launcher->execute_web_search(search_text);
@@ -1444,7 +1439,6 @@ public:
             g_list_free(children);
         #endif
         
-        // Special mode displays
         const char *search_text = gtk_editable_get_text(GTK_EDITABLE(search_entry));
         
         if (calculator_mode) {
@@ -1524,8 +1518,7 @@ public:
             return;
         }
 
-        // Normal app display
-        const int ICONS_PER_ROW = 4;
+        const int ICONS_PER_ROW = 3;
         
         for (size_t i = 0; i < filtered_apps.size(); i += ICONS_PER_ROW) {
             GtkWidget *row_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
@@ -1542,7 +1535,6 @@ public:
                 
                 icon_widgets.push_back(icon_box);
                 
-                // Add favorite star or recent badge
                 if (app.is_favorite || (time(NULL) - app.last_launch) < 3600) {
                     GtkWidget *badge_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
                     gtk_widget_set_halign(badge_box, GTK_ALIGN_CENTER);
@@ -1564,7 +1556,6 @@ public:
                     gtk_box_append(GTK_BOX(icon_box), badge_box);
                 }
                 
-                // Icon
                 GtkWidget *icon_widget;
                 GtkIconTheme *icon_theme = gtk_icon_theme_get_default();
                 
@@ -1599,7 +1590,6 @@ public:
                 gtk_widget_set_size_request(icon_widget, config.icon_size, config.icon_size);
                 gtk_box_append(GTK_BOX(icon_box), icon_widget);
                 
-                // Label
                 GtkWidget *label = gtk_label_new(app.name.c_str());
                 gtk_label_set_max_width_chars(GTK_LABEL(label), 18);
                 gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
@@ -1614,7 +1604,6 @@ public:
                 
                 gtk_box_append(GTK_BOX(icon_box), label);
                 
-                // Make clickable
                 #if GTK_IS_VERSION_4
                     GtkGesture *left_click = gtk_gesture_click_new();
                     g_object_set_data(G_OBJECT(left_click), "app_index", GINT_TO_POINTER(i + j));
@@ -1684,7 +1673,7 @@ public:
             #endif
         #endif
 
-        // Apply CSS
+        // CSS
         css_provider = gtk_css_provider_new();
         #if GTK_IS_VERSION_4
             gtk_style_context_add_provider_for_display(
@@ -1701,11 +1690,30 @@ public:
         #endif
         apply_theme();
 
-        // Main container
-        GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-        gtk_window_set_child(GTK_WINDOW(window), main_box);
+        // Create overlay to stack shader background and UI
+        #if GTK_IS_VERSION_4
+            GtkWidget *overlay = gtk_overlay_new();
+        #else
+            GtkWidget *overlay = gtk_overlay_new();
+        #endif
+        gtk_window_set_child(GTK_WINDOW(window), overlay);
         
-        // Header with stats and power button
+        // GL Area (shader background)
+        gl_area = gtk_gl_area_new();
+        gtk_widget_set_hexpand(gl_area, TRUE);
+        gtk_widget_set_vexpand(gl_area, TRUE);
+        gtk_gl_area_set_has_alpha(GTK_GL_AREA(gl_area), TRUE);
+        g_signal_connect(gl_area, "realize", G_CALLBACK(on_gl_realize), this);
+        g_signal_connect(gl_area, "render", G_CALLBACK(on_gl_render), this);
+        gtk_widget_add_tick_callback(gl_area, gl_tick_callback, NULL, NULL);
+        
+        gtk_overlay_set_child(GTK_OVERLAY(overlay), gl_area);
+        
+        // Main UI box on top of shader
+        GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_overlay_add_overlay_compat(GTK_OVERLAY(overlay), main_box);
+        
+        // Header
         header_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
         gtk_widget_set_name(header_box, "header-box");
         gtk_widget_set_margin_start(header_box, 10);
@@ -1754,7 +1762,7 @@ public:
         gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(app_list), FALSE);
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled_window), app_list);
 
-        // Key press handling
+        // Key press
         #if GTK_IS_VERSION_4
             GtkEventController *key_controller = gtk_event_controller_key_new();
             gtk_widget_add_controller(window, key_controller);
@@ -1763,14 +1771,11 @@ public:
             g_signal_connect(window, "key-press-event", G_CALLBACK(on_key_press), this);
         #endif
 
-        // Initial population
         update_list();
         
-        // Start stats timer
         stats_timer = g_timeout_add_seconds(1, stats_timer_callback, this);
         update_stats();
 
-        // Show window
         gtk_window_present_compat(GTK_WINDOW(window));
         gtk_widget_grab_focus(search_entry);
     }

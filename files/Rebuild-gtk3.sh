@@ -1,15 +1,11 @@
 #!/bin/bash
 # Build with GTK3 instead of GTK4 to avoid library conflicts
-
 cd ~/Desktop/wayfire-launcher/files
-
 echo "Building futuristic-launcher with GTK3..."
 echo "(This avoids GTK2/3/4 mixing issues)"
 echo ""
-
 g++ -std=c++17 -Wall -O2 futuristic-launcher.cpp -o futuristic-launcher \
-    $(pkg-config --cflags --libs gtk+-3.0 gtk-layer-shell-0)
-
+    $(pkg-config --cflags --libs gtk+-3.0 gtk-layer-shell-0 epoxy)
 if [ $? -eq 0 ]; then
     echo ""
     echo "✓ Build successful!"
